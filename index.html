@@ -280,6 +280,14 @@ body:not(.s-exam) .maplegend{display:none}
 .lvrow .snip{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .lvrow .meta{margin-top:5px;font:500 12px/1.4 var(--mono);color:var(--muted)}
 .lvrow .meta b{color:var(--wrong);font-weight:500} .lvrow .meta i{color:var(--right);font-style:normal}
+.weaksum{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:8px;padding:15px 17px;margin-bottom:6px}
+.ws-head{margin:0;font-size:14px;color:var(--muted)}
+.ws-head b{color:var(--ink);font-weight:600}
+.ws-doms{display:flex;flex-direction:column;gap:5px;margin-top:12px}
+.ws-dom{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+.ws-dom i{width:9px;height:9px;border-radius:2px;background:var(--dc);flex:0 0 auto}
+.ws-dom b{color:var(--ink);font-weight:600}
+.ws-dom em{font-style:normal;font:500 12px/1 var(--mono);opacity:.75;margin-left:auto}
 .lvempty{display:none;padding:30px;text-align:center;color:var(--muted);background:var(--surface);border:1px dashed var(--line);border-radius:10px}
 body.lv-empty .lvempty{display:block}
 body.lv-empty #lvstart{display:none}
@@ -640,7 +648,8 @@ window.QUESTIONS = [{"n":1,"d":"D1","e":"Yes - drafting first-pass reports from 
 (function(){
   var Q = window.QUESTIONS || [], LTR = ['A','B','C','D','E'];
   var K_PR = 'ccarp-progress-v1', K_POS = 'ccarp-pos-v1', K_EX = 'ccarp-exam-v1',
-      K_SCR = 'ccarp-screen-v1', K_PERM = 'ccarp-perm-v1', K_PLAIN = 'ccarp-plain-v1';
+      K_SCR = 'ccarp-screen-v1', K_PERM = 'ccarp-perm-v1', K_PLAIN = 'ccarp-plain-v1',
+      K_STATS = 'ccarp-stats-v1';
   var EXAM_N = 63, EXAM_MIN = 120, PASS = 720;
 
   var DOMAINS = [
@@ -703,6 +712,27 @@ window.QUESTIONS = [{"n":1,"d":"D1","e":"Yes - drafting first-pass reports from 
       .replace(/(reject|choose|pick|prefer|select|answer|than|versus|vs\.?|and|or|,) A(?![A-Za-z0-9])/g, function(m,p){ return p + ' [[0]]'; });
   }
   Q.forEach(function(q){ if (q.k === 'mc') q.e = tokenizeLetters(q.e); });
+
+  /* Lifetime record per question, kept across sessions and mock exams so that
+     a weakness shows up even after New session clears the current answers.
+     stats[questionNumber] = { s: times attempted, w: times wrong }             */
+  var stats = load(K_STATS, {});
+  function recordAttempt(q, right){
+    var r = stats[q.n] || { s:0, w:0 };
+    r.s++; if (!right) r.w++;
+    stats[q.n] = r; put(K_STATS, stats);
+  }
+  function statOf(n){ return stats[n] || { s:0, w:0 }; }
+  function weakList(){
+    var out = [];
+    Q.forEach(function(q, i){
+      var r = statOf(q.n);
+      if (r.w > 0) out.push({ i:i, q:q, s:r.s, w:r.w, rate:r.w / r.s });
+    });
+    out.sort(function(a, b){ return (b.w - a.w) || (b.rate - a.rate) || (a.q.n - b.q.n); });
+    return out;
+  }
+  function weakCount(){ return weakList().length; }
 
   var perms = load(K_PERM, {});
   function permFor(q){
@@ -953,6 +983,13 @@ window.QUESTIONS = [{"n":1,"d":"D1","e":"Yes - drafting first-pass reports from 
     stampTime();
     if (paused()){ exam.pausedMs = (exam.pausedMs || 0) + (Date.now() - exam.pausedAt); exam.pausedAt = null; }
     document.body.classList.remove('paused');
+    if (!exam.counted){
+      exam.ids.forEach(function(i){
+        var q = Q[i], v = exam.ans[q.n];
+        if (filled(q, v)) recordAttempt(q, isRight(q, v));
+      });
+      exam.counted = true;
+    }
     exam.submitted = true; exam.finishedAt = Date.now(); put(K_EX, exam);
     stopTicker(); mode = 'all';
     document.body.classList.add('showfb', 'graded');
@@ -1129,8 +1166,13 @@ window.QUESTIONS = [{"n":1,"d":"D1","e":"Yes - drafting first-pass reports from 
       btn('Domains', openTopics, 'key');
       btn('Unanswered (' + (Q.length - a) + ')', function(){ openList('open'); });
       btn('Missed (' + (a - k) + ')', function(){ openList('missed'); });
+      var wk = weakCount();
+      btn('Weak spots (' + wk + ')', function(){ openList('weak'); }, wk ? 'key' : '');
       armButton(btn('New session'), 'New session', 'Click again to start over', function(){
         pAns = {}; drop(K_PR); perms = {}; drop(K_PERM); cur = 0; mode = 'all'; render(); renderChrome();
+      });
+      armButton(btn('Reset stats'), 'Reset stats', 'Click again to wipe your record', function(){
+        stats = {}; drop(K_STATS); renderChrome();
       });
       btn('Home', goHome);
     }
@@ -1160,6 +1202,7 @@ window.QUESTIONS = [{"n":1,"d":"D1","e":"Yes - drafting first-pass reports from 
         btn('Results', function(){ showResults(); }, 'key');
         btn('All ' + exam.ids.length, function(){ openList('exam:all'); });
         btn('Incorrect', function(){ openList('missed'); });
+        btn('Weak spots (' + weakCount() + ')', function(){ setScreen('practice'); openList('weak'); });
         btn('New mock exam', showBrief);
         btn('Home', goHome);
       }
@@ -1205,6 +1248,7 @@ window.QUESTIONS = [{"n":1,"d":"D1","e":"Yes - drafting first-pass reports from 
       if (sel === 'missed') return isMissedP(pos);
       if (sel === 'open') return isOpenP(pos);
       if (sel === 'flag') return isFlaggedP(pos);
+      if (sel === 'weak') return statOf(qAt(pos).n).w > 0;
       return true;
     };
   }
@@ -1217,12 +1261,14 @@ window.QUESTIONS = [{"n":1,"d":"D1","e":"Yes - drafting first-pass reports from 
     var p = String(spec).split(':');
     if (p[0] === 'dom') return DINFO[p[1]].name + (p[2] === 'missed' ? ' — missed' : '');
     if (p[0] === 'exam') return p[1] === 'flag' ? 'Flagged questions' : 'All questions in this exam';
+    if (p[0] === 'weak') return 'Your weak spots';
     return p[0] === 'missed' ? (screen === 'exam' ? 'Questions you got wrong' : 'Missed questions') : 'Unanswered questions';
   }
   function specNoun(spec){
     var p = String(spec).split(':');
     if (p[0] === 'dom') return DINFO[p[1]].name + (p[2] === 'missed' ? ' (missed)' : '');
     if (p[0] === 'exam') return p[1] === 'flag' ? 'flagged' : 'this exam';
+    if (p[0] === 'weak') return 'weak spots';
     return p[0] === 'missed' ? 'incorrect' : 'unanswered';
   }
 
@@ -1385,6 +1431,7 @@ window.QUESTIONS = [{"n":1,"d":"D1","e":"Yes - drafting first-pass reports from 
   function answer(orig){
     var q = qAt(cur), need = needCount(q);
     if (graded() && complete(cur)) return;
+    var wasDone = filled(q, answers()[q.n]);
     var v = (answers()[q.n] || []).slice();
     if (need === 1){
       v = [orig];
@@ -1394,15 +1441,20 @@ window.QUESTIONS = [{"n":1,"d":"D1","e":"Yes - drafting first-pass reports from 
       else if (v.length < need) v.push(orig);
       else { v.shift(); v.push(orig); }      /* replace the oldest pick */
     }
-    answers()[q.n] = v; saveAns(); render(); renderChrome();
+    answers()[q.n] = v;
+    if (screen === 'practice' && !wasDone && filled(q, v)) recordAttempt(q, isRight(q, v));
+    saveAns(); render(); renderChrome();
   }
   function answerRow(rowIdx, choiceIdx){
     var q = qAt(cur);
     if (graded() && complete(cur)) return;
+    var wasDone = filled(q, answers()[q.n]);
     var v = (answers()[q.n] || []).slice();
     while (v.length < q.rows.length) v.push(null);
     v[rowIdx] = choiceIdx;
-    answers()[q.n] = v; saveAns(); render(); renderChrome();
+    answers()[q.n] = v;
+    if (screen === 'practice' && !wasDone && filled(q, v)) recordAttempt(q, isRight(q, v));
+    saveAns(); render(); renderChrome();
   }
   function clearAnswer(){
     var q = qAt(cur);
@@ -1421,20 +1473,53 @@ window.QUESTIONS = [{"n":1,"d":"D1","e":"Yes - drafting first-pass reports from 
   function openList(spec){
     listSpec = spec;
     var hits = collect(spec), sp = String(spec).split(':');
+    if (sp[0] === 'weak'){
+      var rank = {}; weakList().forEach(function(w, ix){ rank[w.q.n] = ix; });
+      hits.sort(function(a, b){ return rank[qAt(a).n] - rank[qAt(b).n]; });
+    }
     var dom = sp[0] === 'dom' ? sp[1] : null;
     el.lvtitle.innerHTML = specLabel(spec) + ' <em>' + hits.length + ' question' + (hits.length === 1 ? '' : 's') + '</em>';
-    el.lvempty.textContent = /missed/.test(spec) ? 'Nothing wrong here.'
+    el.lvempty.textContent = /weak/.test(spec) ? 'No weak spots recorded yet. Answer some questions and anything you get wrong is tracked here across every session and mock exam.'
+      : /missed/.test(spec) ? 'Nothing wrong here.'
       : /flag/.test(spec) ? 'You have not flagged anything.'
       : dom ? 'No questions left on this domain.' : 'Every question has been answered.';
 
     el.lvrows.innerHTML = '';
+    if (sp[0] === 'weak' && hits.length){
+      var att = 0, wr = 0, byDom = {};
+      Q.forEach(function(q){
+        var r = statOf(q.n);
+        if (!r.s) return;
+        att += r.s; wr += r.w;
+        var b = byDom[q.d] || (byDom[q.d] = { s:0, w:0 });
+        b.s += r.s; b.w += r.w;
+      });
+      var doms = DOMAINS.filter(function(d){ return byDom[d.id] && byDom[d.id].s >= 3; })
+        .map(function(d){ var b = byDom[d.id]; return { d:d, rate:b.w / b.s, s:b.s, w:b.w }; })
+        .sort(function(a, b){ return b.rate - a.rate; });
+      var sum = document.createElement('div');
+      sum.className = 'weaksum';
+      sum.innerHTML = '<p class="ws-head"><b>' + hits.length + '</b> question' + (hits.length === 1 ? '' : 's') +
+        ' you have got wrong at least once, worst first. Across everything you have attempted: <b>' + wr +
+        '</b> wrong out of <b>' + att + '</b> attempts (' + Math.round(wr / att * 100) + '%).</p>' +
+        (doms.length ? '<div class="ws-doms">' + doms.map(function(x){
+          return '<span class="ws-dom" data-dom="' + x.d.id + '"><i></i>' + x.d.name +
+                 ' <b>' + Math.round(x.rate * 100) + '%</b> wrong <em>' + x.w + '/' + x.s + '</em></span>';
+        }).join('') + '</div>' : '');
+      el.lvrows.appendChild(sum);
+    }
+
     hits.forEach(function(p){
       var q = qAt(p), b = document.createElement('button');
       b.type = 'button';
       b.className = 'lvrow' + (isFlaggedP(p) ? ' flagged' : '');
       b.setAttribute('data-dom', q.d);
       var meta;
-      if (graded() && isMissedP(p)){
+      if (sp[0] === 'weak'){
+        var rr = statOf(q.n);
+        meta = '<div class="meta"><b>wrong ' + rr.w + ' of ' + rr.s + '</b> attempt' + (rr.s === 1 ? '' : 's') +
+               ' · ' + Math.round(rr.w / rr.s * 100) + '% error rate · ' + DINFO[q.d].name + '</div>';
+      } else if (graded() && isMissedP(p)){
         meta = q.k === 'mc'
           ? '<div class="meta">You chose <b>' + (pickOf(p) || []).map(function(x){ return letterOf(q, x); }).sort().join(', ') +
             '</b> · correct is <i>' + q.a.map(function(x){ return letterOf(q, x); }).sort().join(', ') + '</i></div>'
@@ -1561,6 +1646,7 @@ window.QUESTIONS = [{"n":1,"d":"D1","e":"Yes - drafting first-pass reports from 
       if (k === 't'){ ev.preventDefault(); return openTopics(); }
       if (k === 'm'){ ev.preventDefault(); return openList('missed'); }
       if (k === 'u'){ ev.preventDefault(); return openList('open'); }
+      if (k === 'w'){ ev.preventDefault(); return openList('weak'); }
     } else {
       if (k === 'l'){ ev.preventDefault(); return openList('exam:all'); }
       if (k === 'p' && !exam.submitted){ ev.preventDefault(); return pauseExam(); }
